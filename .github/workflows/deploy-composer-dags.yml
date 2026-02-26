@@ -14,7 +14,7 @@ on:
       - 'plugins/**'
 
 
-## Prevent overlapping deployments
+# Prevent overlapping deployments
 concurrency:
   group: deploy-composer-dags
   cancel-in-progress: true
