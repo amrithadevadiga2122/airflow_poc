@@ -52,8 +52,8 @@ jobs:
     env:
       # Set these in GitHub Repository Variables (Settings > Variables)
       GCP_PROJECT: ${{ vars.GCP_PROJECT }}
-      GCP_REGION: ${{ vars.GCP_REGION }}          # e.g., us-central1
-      COMPOSER_ENV: ${{ vars.COMPOSER_ENV }}      # e.g., airflowdev
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      COMPOSER_ENV: ${{ vars.COMPOSER_ENV }}
       DAG_SUBFOLDER: ${{ vars.DAG_SUBFOLDER || 'airflow_poc' }}
 
     steps:
@@ -80,44 +80,53 @@ jobs:
 
       - name: Get Cloud Composer storage prefixes
         id: composer
+        shell: bash
         run: |
           set -euo pipefail
           DAG_PREFIX=$(gcloud composer environments describe "$COMPOSER_ENV" --location "$GCP_REGION" --format='value(config.dagGcsPrefix)')
           PLUGINS_PREFIX=$(gcloud composer environments describe "$COMPOSER_ENV" --location "$GCP_REGION" --format='value(config.pluginsGcsPrefix)')
+
           if [ -z "$DAG_PREFIX" ] || [ "$DAG_PREFIX" = "None" ]; then
             echo "Environment not ready: dagGcsPrefix is empty/None. Aborting." >&2
             exit 1
           fi
+
           echo "dag=$DAG_PREFIX" >> "$GITHUB_OUTPUT"
+          echo "plugins=$PLUGINS_PREFIX" >> "$GITHUB_OUTPUT"
+
+      - name: Show locations
+        run: |
+          echo "DAGs will be uploaded to: ${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
+          echo "Plugins will be uploaded to: ${{ steps.composer.outputs.plugins }}/${{ env.DAG_SUBFOLDER }}"
+
       - name: Stamp deployment metadata
+        if: hashFiles('dags/**') != ''
+        shell: bash
         run: |
           mkdir -p .ci
           printf "repo=%s\nsha=%s\nref=%s\nactor=%s\nwhen=%s\n" \
-        if: hashFiles('dags/**') != ''
+            "${{ github.repository }}" "${{ github.sha }}" "${{ github.ref }}" "${{ github.actor }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .ci/deploy.txt
+
       - name: Sync plugins (optional)
+        if: hashFiles('plugins/**') != ''
+        shell: bash
+        run: |
+          gsutil -m rsync -r -x '(^|/)\..*|__pycache__/|(^|/)tests(/|$)' -d \
+            plugins "${{ steps.composer.outputs.plugins }}/${{ env.DAG_SUBFOLDER }}"
+
+      - name: Sync DAGs to Composer
+        if: hashFiles('dags/**') != ''
+        shell: bash
+        run: |
+          gsutil -m rsync -r -x '(^|/)\..*|__pycache__/|(^|/)tests(/|$)' -d \
+            dags "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
+
+          # Upload deployment metadata alongside DAGs for traceability
+          gsutil cp .ci/deploy.txt "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}/.deploy.txt"
+
       # Optional: update PyPI packages for the environment from a file (this restarts components)
-      # Provide a file like composer-packages.txt mapping to {package: version}
+      # - name: Update PyPI packages (optional)
       #   if: hashFiles('composer-packages.txt') != ''
       #   run: |
       #     gcloud composer environments update "$COMPOSER_ENV" --location "$GCP_REGION" \
       #       --update-pypi-packages-from-file composer-packages.txt
-
-        run: |
-          echo "DAGs uploaded to: ${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
-          echo "Plugins uploaded to: ${{ steps.composer.outputs.plugins }}/${{ env.DAG_SUBFOLDER }}"      - name: Show locations
-      # - name: Update PyPI packages (optional)
-
-            "plugins" "${{ steps.composer.outputs.plugins }}/${{ env.DAG_SUBFOLDER }}"
-          gsutil -m rsync -r -x '(^|/)\..*|__pycache__/' -d \
-        run: |
-        if: hashFiles('plugins/**') != ''
-
-          gsutil -m rsync -r -x '(^|/)\..*|__pycache__/|(^|/)tests(/|$)' -d \
-          gsutil cp .ci/deploy.txt "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}/.deploy.txt"
-            "dags" "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
-        run: |
-
-      - name: Sync DAGs to Composer
-            "${{ github.repository }}" "${{ github.sha }}" "${{ github.ref }}" "${{ github.actor }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .ci/deploy.txt
-          echo "plugins=$PLUGINS_PREFIX" >> "$GITHUB_OUTPUT"
-
