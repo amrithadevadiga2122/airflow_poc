@@ -7,19 +7,12 @@ on:
       - 'dags/**'
       - 'plugins/**'
       - '.github/workflows/deploy-composer-dags.yml'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'dags/**'
-      - 'plugins/**'
+  workflow_dispatch:
 
-
-# Prevent overlapping deployments
 concurrency:
   group: deploy-composer-dags
   cancel-in-progress: true
 
-# Required for GitHub OIDC authentication
 permissions:
   contents: read
   id-token: write
@@ -37,47 +30,26 @@ jobs:
           python-version: '3.11'
 
       - name: Install linters
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install flake8
 
       - name: Lint DAGs
+      
+        shell: bash
         run: |
-          # Adjust lints to your needs; non-blocking by default
           flake8 dags || true
-
-
-name: OIDC Smoke Test
-on:
-  workflow_dispatch:
-permissions:
-  id-token: write
-  contents: read
-
-jobs:
-  auth-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.SERVICE_ACCOUNT_EMAIL }}
-      - uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ vars.GCP_PROJECT }}
-      - run: gcloud auth list && gcloud storage buckets list --project="${{ vars.GCP_PROJECT }}" | head -n 5
 
   deploy:
     needs: lint
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
-      # Set these in GitHub Repository Variables (Settings > Variables)
       GCP_PROJECT: ${{ vars.GCP_PROJECT }}
       GCP_REGION: ${{ vars.GCP_REGION }}
       COMPOSER_ENV: ${{ vars.COMPOSER_ENV }}
-      DAG_SUBFOLDER: ${{ vars.DAG_SUBFOLDER || 'airflow_poc' }}
+      DAG_SUBFOLDER: ${{ vars.DAG_SUBFOLDER }}
 
     steps:
       - name: Checkout
@@ -88,13 +60,7 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.SERVICE_ACCOUNT_EMAIL }}
-          token_format: 'access_token'
-
-      # If you cannot set up OIDC, use this alternative auth (less secure):
-      # - name: Authenticate via service account key
-      #   uses: google-github-actions/auth@v2
-      #   with:
-      #     credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          token_format: access_token
 
       - name: Setup gcloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -108,48 +74,45 @@ jobs:
           set -euo pipefail
           DAG_PREFIX=$(gcloud composer environments describe "$COMPOSER_ENV" --location "$GCP_REGION" --format='value(config.dagGcsPrefix)')
           PLUGINS_PREFIX=$(gcloud composer environments describe "$COMPOSER_ENV" --location "$GCP_REGION" --format='value(config.pluginsGcsPrefix)')
-
           if [ -z "$DAG_PREFIX" ] || [ "$DAG_PREFIX" = "None" ]; then
-            echo "Environment not ready: dagGcsPrefix is empty/None. Aborting." >&2
+            echo "Environment not ready: dagGcsPrefix is empty/None. Ensure Composer env is RUNNING and properly provisioned, then retry." >&2
             exit 1
           fi
-
           echo "dag=$DAG_PREFIX" >> "$GITHUB_OUTPUT"
           echo "plugins=$PLUGINS_PREFIX" >> "$GITHUB_OUTPUT"
 
-      - name: Show locations
+      - name: Resolve target subfolder
+        id: path
+        shell: bash
         run: |
-          echo "DAGs will be uploaded to: ${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
-          echo "Plugins will be uploaded to: ${{ steps.composer.outputs.plugins }}/${{ env.DAG_SUBFOLDER }}"
+          SUBFOLDER="${{ env.DAG_SUBFOLDER }}"
+          if [ -z "$SUBFOLDER" ]; then SUBFOLDER="airflow_poc"; fi
+          echo "subfolder=$SUBFOLDER" >> "$GITHUB_OUTPUT"
 
       - name: Stamp deployment metadata
-        if: hashFiles('dags/**') != ''
         shell: bash
         run: |
           mkdir -p .ci
           printf "repo=%s\nsha=%s\nref=%s\nactor=%s\nwhen=%s\n" \
             "${{ github.repository }}" "${{ github.sha }}" "${{ github.ref }}" "${{ github.actor }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .ci/deploy.txt
 
-      - name: Sync plugins (optional)
-        if: hashFiles('plugins/**') != ''
-        shell: bash
-        run: |
-          gsutil -m rsync -r -x '(^|/)\..*|__pycache__/|(^|/)tests(/|$)' -d \
-            plugins "${{ steps.composer.outputs.plugins }}/${{ env.DAG_SUBFOLDER }}"
-
       - name: Sync DAGs to Composer
         if: hashFiles('dags/**') != ''
         shell: bash
         run: |
           gsutil -m rsync -r -x '(^|/)\..*|__pycache__/|(^|/)tests(/|$)' -d \
-            dags "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
+            "dags" "${{ steps.composer.outputs.dag }}/${{ steps.path.outputs.subfolder }}"
+          gsutil cp .ci/deploy.txt "${{ steps.composer.outputs.dag }}/${{ steps.path.outputs.subfolder }}/.deploy.txt"
 
-          # Upload deployment metadata alongside DAGs for traceability
-          gsutil cp .ci/deploy.txt "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}/.deploy.txt"
+      - name: Sync plugins (optional)
+        if: hashFiles('plugins/**') != ''
+        shell: bash
+        run: |
+          gsutil -m rsync -r -x '(^|/)\..*|__pycache__/' -d \
+            "plugins" "${{ steps.composer.outputs.plugins }}/${{ steps.path.outputs.subfolder }}"
 
-      # Optional: update PyPI packages for the environment from a file (this restarts components)
-      # - name: Update PyPI packages (optional)
-      #   if: hashFiles('composer-packages.txt') != ''
-      #   run: |
-      #     gcloud composer environments update "$COMPOSER_ENV" --location "$GCP_REGION" \
-      #       --update-pypi-packages-from-file composer-packages.txt
+      - name: Show locations
+        shell: bash
+        run: |
+          echo "DAGs uploaded to: ${{ steps.composer.outputs.dag }}/${{ steps.path.outputs.subfolder }}"
+          echo "Plugins uploaded to: ${{ steps.composer.outputs.plugins }}/${{ steps.path.outputs.subfolder }}"
