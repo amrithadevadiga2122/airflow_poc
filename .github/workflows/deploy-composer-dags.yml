@@ -6,12 +6,14 @@ on:
     paths:
       - 'dags/**'
       - 'plugins/**'
+      - 'tests/**'
       - '.github/workflows/deploy-composer-dags.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'dags/**'
       - 'plugins/**'
+      - 'tests/**'
   workflow_dispatch:
     inputs:
       run_dag_tests:
@@ -48,12 +50,27 @@ jobs:
         run: |
           flake8 dags || true
 
-  validate:
+  tests:
     runs-on: ubuntu-latest
     env:
       AIRFLOW_VERSION: ${{ vars.AIRFLOW_VERSION || '2.7.3' }}
       PYTHON_VERSION: '3.11'
-      RUN_DAG_TESTS: ${{ inputs.run_dag_tests || vars.RUN_DAG_TESTS || 'false' }}
+      # Provide Variable values via env to avoid metastore dependence in CI
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
+      AIRFLOW__SECRETS__BACKENDS: 'airflow.secrets.environment_variables.EnvironmentVariablesBackend'
+      AIRFLOW_VAR_GCP_PROJECT_ID: ${{ vars.GCP_PROJECT || 'prj-aidataandanalytics-s-24362' }}
+      AIRFLOW_VAR_BQ_DATASET: ${{ vars.BQ_DATASET || 'retail_data_poc' }}
+      AIRFLOW_VAR_RAW_BUCKET: ${{ vars.RAW_BUCKET || 'airflow-cicd-poc' }}
+      AIRFLOW_VAR_TEMP_BUCKET: ${{ vars.TEMP_BUCKET || 'airflow-cicd-poc-tmp' }}
+      AIRFLOW_VAR_GCP_CONN_ID: ${{ vars.GCP_CONN_ID || 'google_cloud_default' }}
+      AIRFLOW_VAR_BQ_LOCATION: ${{ vars.BQ_LOCATION || 'us-central1' }}
+      AIRFLOW_VAR_DATAPROC_REGION: ${{ vars.DATAPROC_REGION || 'us-central1' }}
+      AIRFLOW_VAR_DATAPROC_RUNTIME_VERSION: ${{ vars.DATAPROC_RUNTIME_VERSION || '2.2' }}
+      AIRFLOW_VAR_DATAPROC_SERVICE_ACCOUNT: ${{ vars.DATAPROC_SERVICE_ACCOUNT || '726220205777-compute@developer.gserviceaccount.com' }}
+      AIRFLOW_VAR_DATAPROC_NETWORK_URI: ${{ vars.DATAPROC_NETWORK_URI || 'projects/prj-aidataandanalytics-s-24362/global/networks/dmi-network' }}
+      AIRFLOW_VAR_DATAPROC_SUBNETWORK_URI: ${{ vars.DATAPROC_SUBNETWORK_URI || 'projects/prj-aidataandanalytics-s-24362/regions/us-central1/subnetworks/dmi-network' }}
+      AIRFLOW_VAR_SQL_BUCKET: ${{ vars.SQL_BUCKET || vars.RAW_BUCKET || 'airflow-cicd-poc' }}
+      AIRFLOW_VAR_SQL_OBJECT: ${{ vars.SQL_OBJECT || 'scripts/filtered.sql' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,7 +80,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Apache Airflow (pinned via constraints)
+      - name: Install Apache Airflow (constraints)
         shell: bash
         run: |
           set -euo pipefail
@@ -71,62 +88,21 @@ jobs:
           echo "Using Airflow ${AIRFLOW_VERSION} with constraints ${CONSTRAINTS_URL}"
           python -m pip install --upgrade pip
           pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINTS_URL}"
-          # Ensure Google provider is present for airflow.providers.google imports
           pip install "apache-airflow-providers-google" --constraint "${CONSTRAINTS_URL}"
-          # Export for subsequent steps
           echo "CONSTRAINTS_URL=${CONSTRAINTS_URL}" >> $GITHUB_ENV
 
-      - name: Install DAG dependencies (requirements.txt or composer-packages.txt)
-        if: hashFiles('composer-packages.txt') != '' || hashFiles('requirements.txt') != ''
-        shell: bash
+      - name: Install project requirements
+        if: hashFiles('requirements.txt') != ''
         run: |
-          set -euo pipefail
-          if [ -f composer-packages.txt ]; then
-            echo "Installing from composer-packages.txt under Airflow constraints"
-            pip install -r composer-packages.txt --constraint "${CONSTRAINTS_URL}" || true
-          elif [ -f requirements.txt ]; then
-            echo "Installing from requirements.txt under Airflow constraints"
-            pip install -r requirements.txt --constraint "${CONSTRAINTS_URL}" || true
-          fi
+          pip install -r requirements.txt --constraint "${CONSTRAINTS_URL}" || true
 
-      - name: Validate DAG imports (fail on import errors)
-        shell: bash
+      - name: Run unit tests (pytest)
         run: |
-          python - <<'PY'
-          import sys
-          from airflow.models import DagBag
-          dagbag = DagBag(dag_folder='dags', include_examples=False)
-          if dagbag.import_errors:
-              print("DAG import errors detected:\n")
-              for mod, err in dagbag.import_errors.items():
-                  print(f"- {mod}:\n{err}\n")
-              sys.exit(1)
-          else:
-              print(f"OK: {len(dagbag.dags)} DAGs imported successfully: {sorted(dagbag.dags.keys())}")
-          PY
-
-      - name: OPTIONAL - Run 'airflow dags test' for each DAG
-        if: ${{ env.RUN_DAG_TESTS == 'true' }}
-        env:
-          AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
-          AIRFLOW__CORE__DAGS_FOLDER: ${{ github.workspace }}/dags
-        shell: bash
-        run: |
-          set -euo pipefail
-          airflow db init
-          DAG_IDS=$(python - <<'PY'
-          from airflow.models import DagBag
-          print(' '.join(sorted(DagBag('dags', include_examples=False).dags.keys())))
-          PY
-          )
-          echo "Testing DAGs: $DAG_IDS"
-          for d in $DAG_IDS; do
-            echo "\n=== airflow dags test $d ==="
-            airflow dags test "$d" 2024-01-01T00:00:00 --subdir dags || exit 1
-          done
+          pip install pytest pytest-cov
+          pytest -q --maxfail=1 --disable-warnings --cov=dags --cov=plugins --cov-report=xml:coverage.xml
 
   deploy:
-    needs: [lint, validate]
+    needs: [lint, tests]
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
