@@ -51,7 +51,6 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     env:
-      # Set this to match your Composer Airflow version (Settings > Variables)
       AIRFLOW_VERSION: ${{ vars.AIRFLOW_VERSION || '2.7.3' }}
       PYTHON_VERSION: '3.11'
       RUN_DAG_TESTS: ${{ inputs.run_dag_tests || vars.RUN_DAG_TESTS || 'false' }}
@@ -64,24 +63,31 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Apache Airflow (use constraints to match version)
+      - name: Install Apache Airflow (pinned via constraints)
         shell: bash
         run: |
           set -euo pipefail
           CONSTRAINTS_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+          echo "Using Airflow ${AIRFLOW_VERSION} with constraints ${CONSTRAINTS_URL}"
           python -m pip install --upgrade pip
           pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINTS_URL}"
+          # Ensure Google provider is present for airflow.providers.google imports
+          pip install "apache-airflow-providers-google" --constraint "${CONSTRAINTS_URL}"
+          # Export for subsequent steps
+          echo "CONSTRAINTS_URL=${CONSTRAINTS_URL}" >> $GITHUB_ENV
 
-      - name: Install DAG dependencies (optional)
+      - name: Install DAG dependencies (requirements.txt or composer-packages.txt)
         if: hashFiles('composer-packages.txt') != '' || hashFiles('requirements.txt') != ''
+        shell: bash
         run: |
-          # Prefer composer-packages.txt if present, otherwise requirements.txt
+          set -euo pipefail
           if [ -f composer-packages.txt ]; then
-            pip install -r composer-packages.txt || true
+            echo "Installing from composer-packages.txt under Airflow constraints"
+            pip install -r composer-packages.txt --constraint "${CONSTRAINTS_URL}" || true
           elif [ -f requirements.txt ]; then
-            pip install -r requirements.txt || true
+            echo "Installing from requirements.txt under Airflow constraints"
+            pip install -r requirements.txt --constraint "${CONSTRAINTS_URL}" || true
           fi
-          
 
       - name: Validate DAG imports (fail on import errors)
         shell: bash
@@ -107,9 +113,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Initialize Airflow DB for local CLI testing
           airflow db init
-          # List DAG IDs via DagBag to avoid loading examples
           DAG_IDS=$(python - <<'PY'
           from airflow.models import DagBag
           print(' '.join(sorted(DagBag('dags', include_examples=False).dags.keys())))
@@ -118,7 +122,6 @@ jobs:
           echo "Testing DAGs: $DAG_IDS"
           for d in $DAG_IDS; do
             echo "\n=== airflow dags test $d ==="
-            # Use a fixed execution date in the past; adjust if your DAG relies on specific dates
             airflow dags test "$d" 2024-01-01T00:00:00 --subdir dags || exit 1
           done
 
