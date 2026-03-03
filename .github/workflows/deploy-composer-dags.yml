@@ -7,8 +7,17 @@ on:
       - 'dags/**'
       - 'plugins/**'
       - '.github/workflows/deploy-composer-dags.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'dags/**'
+      - 'plugins/**'
   workflow_dispatch:
-
+    inputs:
+      run_dag_tests:
+        description: 'Run airflow dags test for each DAG (experimental)'
+        required: false
+        default: 'false'
 
 concurrency:
   group: deploy-composer-dags
@@ -31,27 +40,96 @@ jobs:
           python-version: '3.11'
 
       - name: Install linters
-        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install flake8
 
       - name: Lint DAGs
-      
-        shell: bash
         run: |
           flake8 dags || true
 
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      # Set this to match your Composer Airflow version (Settings > Variables)
+      AIRFLOW_VERSION: ${{ vars.AIRFLOW_VERSION || '2.7.3' }}
+      PYTHON_VERSION: '3.11'
+      RUN_DAG_TESTS: ${{ inputs.run_dag_tests || vars.RUN_DAG_TESTS || 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Apache Airflow (use constraints to match version)
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONSTRAINTS_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+          python -m pip install --upgrade pip
+          pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINTS_URL}"
+
+      - name: Install DAG dependencies (optional)
+        if: hashFiles('composer-packages.txt') != '' || hashFiles('requirements.txt') != ''
+        run: |
+          # Prefer composer-packages.txt if present, otherwise requirements.txt
+          if [ -f composer-packages.txt ]; then
+            pip install -r composer-packages.txt || true
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt || true
+          fi
+
+      - name: Validate DAG imports (fail on import errors)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys
+          from airflow.models import DagBag
+          dagbag = DagBag(dag_folder='dags', include_examples=False)
+          if dagbag.import_errors:
+              print("DAG import errors detected:\n")
+              for mod, err in dagbag.import_errors.items():
+                  print(f"- {mod}:\n{err}\n")
+              sys.exit(1)
+          else:
+              print(f"OK: {len(dagbag.dags)} DAGs imported successfully: {sorted(dagbag.dags.keys())}")
+          PY
+
+      - name: OPTIONAL - Run 'airflow dags test' for each DAG
+        if: ${{ env.RUN_DAG_TESTS == 'true' }}
+        env:
+          AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
+          AIRFLOW__CORE__DAGS_FOLDER: ${{ github.workspace }}/dags
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Initialize Airflow DB for local CLI testing
+          airflow db init
+          # List DAG IDs via DagBag to avoid loading examples
+          DAG_IDS=$(python - <<'PY'
+          from airflow.models import DagBag
+          print(' '.join(sorted(DagBag('dags', include_examples=False).dags.keys())))
+          PY
+          )
+          echo "Testing DAGs: $DAG_IDS"
+          for d in $DAG_IDS; do
+            echo "\n=== airflow dags test $d ==="
+            # Use a fixed execution date in the past; adjust if your DAG relies on specific dates
+            airflow dags test "$d" 2024-01-01T00:00:00 --subdir dags || exit 1
+          done
+
   deploy:
-    needs: lint
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, validate]
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       GCP_PROJECT: ${{ vars.GCP_PROJECT }}
       GCP_REGION: ${{ vars.GCP_REGION }}
       COMPOSER_ENV: ${{ vars.COMPOSER_ENV }}
-      DAG_SUBFOLDER: ${{ vars.DAG_SUBFOLDER }}
-
+      DAG_SUBFOLDER: ${{ vars.DAG_SUBFOLDER || 'airflow_poc' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,7 +139,7 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.SERVICE_ACCOUNT_EMAIL }}
-          token_format: access_token
+          token_format: 'access_token'
 
       - name: Setup gcloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -76,44 +154,41 @@ jobs:
           DAG_PREFIX=$(gcloud composer environments describe "$COMPOSER_ENV" --location "$GCP_REGION" --format='value(config.dagGcsPrefix)')
           PLUGINS_PREFIX=$(gcloud composer environments describe "$COMPOSER_ENV" --location "$GCP_REGION" --format='value(config.pluginsGcsPrefix)')
           if [ -z "$DAG_PREFIX" ] || [ "$DAG_PREFIX" = "None" ]; then
-            echo "Environment not ready: dagGcsPrefix is empty/None. Ensure Composer env is RUNNING and properly provisioned, then retry." >&2
+            echo "Environment not ready: dagGcsPrefix is empty/None. Aborting." >&2
             exit 1
           fi
           echo "dag=$DAG_PREFIX" >> "$GITHUB_OUTPUT"
           echo "plugins=$PLUGINS_PREFIX" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve target subfolder
-        id: path
-        shell: bash
+      - name: Show locations
         run: |
-          SUBFOLDER="${{ env.DAG_SUBFOLDER }}"
-          if [ -z "$SUBFOLDER" ]; then SUBFOLDER="airflow_poc"; fi
-          echo "subfolder=$SUBFOLDER" >> "$GITHUB_OUTPUT"
+          echo "DAGs will be uploaded to: ${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
+          echo "Plugins will be uploaded to: ${{ steps.composer.outputs.plugins }}/${{ env.DAG_SUBFOLDER }}"
 
       - name: Stamp deployment metadata
+        if: hashFiles('dags/**') != ''
         shell: bash
         run: |
           mkdir -p .ci
-          printf "repo=%s\nsha=%s\nref=%s\nactor=%s\nwhen=%s\n" \
-            "${{ github.repository }}" "${{ github.sha }}" "${{ github.ref }}" "${{ github.actor }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .ci/deploy.txt
+          cat > .ci/deploy.txt <<EOF
+          repo=${{ github.repository }}
+          sha=${{ github.sha }}
+          ref=${{ github.ref }}
+          actor=${{ github.actor }}
+          when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          EOF
+
+      - name: Sync plugins (optional)
+        if: hashFiles('plugins/**') != ''
+        shell: bash
+        run: |
+          gsutil -m rsync -r -x '(^|/)\..*|__pycache__/|(^|/)tests(/|$)' -d \
+            plugins "${{ steps.composer.outputs.plugins }}/${{ env.DAG_SUBFOLDER }}"
 
       - name: Sync DAGs to Composer
         if: hashFiles('dags/**') != ''
         shell: bash
         run: |
           gsutil -m rsync -r -x '(^|/)\..*|__pycache__/|(^|/)tests(/|$)' -d \
-            "dags" "${{ steps.composer.outputs.dag }}/${{ steps.path.outputs.subfolder }}"
-          gsutil cp .ci/deploy.txt "${{ steps.composer.outputs.dag }}/${{ steps.path.outputs.subfolder }}/.deploy.txt"
-
-      - name: Sync plugins (optional)
-        if: hashFiles('plugins/**') != ''
-        shell: bash
-        run: |
-          gsutil -m rsync -r -x '(^|/)\..*|__pycache__/' -d \
-            "plugins" "${{ steps.composer.outputs.plugins }}/${{ steps.path.outputs.subfolder }}"
-
-      - name: Show locations
-        shell: bash
-        run: |
-          echo "DAGs uploaded to: ${{ steps.composer.outputs.dag }}/${{ steps.path.outputs.subfolder }}"
-          echo "Plugins uploaded to: ${{ steps.composer.outputs.plugins }}/${{ steps.path.outputs.subfolder }}"
+            dags "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
+          gsutil cp .ci/deploy.txt "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}/.deploy.txt"
