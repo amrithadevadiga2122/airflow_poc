@@ -6,14 +6,14 @@ on:
     paths:
       - 'dags/**'
       - 'plugins/**'
-      - 'tests/**'
+      - 'sql/**'
       - '.github/workflows/deploy-composer-dags.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'dags/**'
       - 'plugins/**'
-      - 'tests/**'
+      - 'sql/**'
   workflow_dispatch:
     inputs:
       run_dag_tests:
@@ -55,7 +55,6 @@ jobs:
     env:
       AIRFLOW_VERSION: ${{ vars.AIRFLOW_VERSION || '2.7.3' }}
       PYTHON_VERSION: '3.11'
-      # Provide Variable values via env to avoid metastore dependence in CI
       AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
       AIRFLOW__SECRETS__BACKENDS: 'airflow.secrets.environment_variables.EnvironmentVariablesBackend'
       AIRFLOW_VAR_GCP_PROJECT_ID: ${{ vars.GCP_PROJECT || 'prj-aidataandanalytics-s-24362' }}
@@ -110,6 +109,8 @@ jobs:
       GCP_REGION: ${{ vars.GCP_REGION }}
       COMPOSER_ENV: ${{ vars.COMPOSER_ENV }}
       DAG_SUBFOLDER: ${{ vars.DAG_SUBFOLDER || 'airflow_poc' }}
+      SQL_BUCKET: ${{ vars.SQL_BUCKET || vars.RAW_BUCKET }}
+      SQL_DEST_PREFIX: ${{ vars.SQL_DEST_PREFIX || 'scripts' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -144,6 +145,11 @@ jobs:
         run: |
           echo "DAGs will be uploaded to: ${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
           echo "Plugins will be uploaded to: ${{ steps.composer.outputs.plugins }}/${{ env.DAG_SUBFOLDER }}"
+          if [ -n "${{ env.SQL_BUCKET }}" ]; then
+            echo "SQL scripts will be uploaded to: gs://${{ env.SQL_BUCKET }}/${{ env.SQL_DEST_PREFIX }}"
+          else
+            echo "SQL_BUCKET not set; skipping SQL sync display"
+          fi
 
       - name: Stamp deployment metadata
         if: hashFiles('dags/**') != ''
@@ -172,3 +178,10 @@ jobs:
           gsutil -m rsync -r -x '(^|/)\..*|__pycache__/|(^|/)tests(/|$)' -d \
             dags "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}"
           gsutil cp .ci/deploy.txt "${{ steps.composer.outputs.dag }}/${{ env.DAG_SUBFOLDER }}/.deploy.txt"
+
+      - name: Sync SQL scripts to GCS (repo sql/ -> gs://SQL_BUCKET/SQL_DEST_PREFIX)
+        if: hashFiles('sql/**') != '' && env.SQL_BUCKET != ''
+        shell: bash
+        run: |
+          gsutil -m rsync -r -x '(^|/)\..*|__pycache__/|(^|/)tests(/|$)' -d \
+            sql "gs://${{ env.SQL_BUCKET }}/${{ env.SQL_DEST_PREFIX }}"
