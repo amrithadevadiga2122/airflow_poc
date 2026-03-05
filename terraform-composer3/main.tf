@@ -37,7 +37,8 @@ module "composer3" {
   image_version         = var.composer_image_version
   service_account_email = var.service_account_email
 
-
+  network_self_link    = var.network_self_link
+  subnetwork_self_link = var.subnet_self_link
 
   dags_bucket           = module.storage.bucket_name
 
