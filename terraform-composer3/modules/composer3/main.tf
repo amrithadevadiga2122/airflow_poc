@@ -8,43 +8,25 @@ resource "google_composer_environment" "env" {
       env_variables            = var.env_variables
       pypi_packages            = var.pypi_packages
       airflow_config_overrides = var.airflow_config_overrides
-
-      dynamic "web_server_plugins_config" {
-        for_each = var.web_server_plugins_enabled ? [1] : []
-        content {}
-      }
+      # web_server_plugins_config removed (unsupported in provider 5.45.x)
     }
 
+    # Keep only supported workloads (remove dag_processor/triggerer, storage_gb)
     workloads_config {
       scheduler {
-        count       = 2
-        cpu         = 0.5
-        memory_gb   = 2
-        storage_gb  = 1
-      }
-      dag_processor {
-        count       = 2
-        cpu         = 1
-        memory_gb   = 4
-        storage_gb  = 1
-      }
-      triggerer {
-        count       = 2
-        cpu         = 0.5
-        memory_gb   = 1
-        storage_gb  = 1
+        count     = 2
+        cpu       = 0.5
+        memory_gb = 2
       }
       web_server {
-        cpu         = 1
-        memory_gb   = 2
-        storage_gb  = 1
+        cpu       = 1
+        memory_gb = 2
       }
       worker {
-        min_count   = 2
-        max_count   = 3
-        cpu         = 0.5
-        memory_gb   = 2
-        storage_gb  = 10
+        min_count = 2
+        max_count = 3
+        cpu       = 0.5
+        memory_gb = 2
       }
     }
 
@@ -57,13 +39,8 @@ resource "google_composer_environment" "env" {
       subnetwork      = var.subnetwork_self_link
     }
 
-    private_environment_config {
-      enable_private_environment = true
-    }
-
-    storage_config {
-      bucket = var.dags_bucket
-    }
+    # private_environment_config removed (unsupported in provider 5.45.x)
+    # storage_config removed (unsupported in provider 5.45.x)
 
     web_server_network_access_control {
       allowed_ip_range {
@@ -73,4 +50,3 @@ resource "google_composer_environment" "env" {
     }
   }
 }
-
