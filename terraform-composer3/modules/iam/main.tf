@@ -12,4 +12,3 @@ resource "google_storage_bucket_iam_member" "sa_on_bucket" {
   member = "serviceAccount:${var.service_account_email}"
 }
 
-output "service_account_email" { value = var.service_account_email }

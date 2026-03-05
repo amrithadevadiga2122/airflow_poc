@@ -5,6 +5,3 @@ resource "google_storage_bucket" "bucket" {
   force_destroy = var.force_destroy
 }
 
-output "bucket_name" {
-  value = var.create ? google_storage_bucket.bucket[0].name : var.bucket_name
-}
