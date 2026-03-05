@@ -7,7 +7,7 @@ on:
       - "**.tfvars"
       - ".github/workflows/terraform-composer-dev.yml"
   push:
-    branches: [ main ]
+    branches: [ "main" ]
     paths:
       - "**.tf"
       - "**.tfvars"
@@ -39,9 +39,8 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.6.6
+          terraform_version: "1.6.6"
 
-      # OIDC auth to GCP (preferred)
       - name: Google Auth (WIF)
         uses: google-github-actions/auth@v2
         with:
@@ -92,7 +91,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.6.6
+          terraform_version: "1.6.6"
 
       - name: Google Auth (WIF)
         uses: google-github-actions/auth@v2
