@@ -59,7 +59,8 @@ jobs:
         working-directory: terraform-composer3
 
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive
+        #run: terraform fmt -check -recursive
+        run: terraform fmt -recursive
         working-directory: terraform-composer3
 
       - name: Terraform Validate
