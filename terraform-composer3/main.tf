@@ -53,6 +53,6 @@ module "composer3" {
     google_project_service.compute_api,
     google_project_service.container_api,
     google_project_service.artifactregistry_api,
-    module.iam
+
   ]
 }
