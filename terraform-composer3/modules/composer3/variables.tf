@@ -1,0 +1,13 @@
+variable "project_id"            { type = string }
+variable "region"                { type = string }
+variable "name"                  { type = string }
+variable "image_version"         { type = string }
+variable "service_account_email" { type = string }
+variable "network_self_link"     { type = string }
+variable "subnetwork_self_link"  { type = string }
+variable "dags_bucket"           { type = string }
+variable "allowed_cidr"          { type = string }
+variable "env_variables"            { type = map(string) }
+variable "pypi_packages"            { type = map(string) }
+variable "airflow_config_overrides" { type = map(string) }
+variable "web_server_plugins_enabled" { type = bool }
