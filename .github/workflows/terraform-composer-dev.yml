@@ -19,19 +19,10 @@ permissions:
   id-token: write
   pull-requests: write
 
-env:
-  TF_IN_AUTOMATION: "true"
-  TF_INPUT: "false"
-  TF_VAR_file: environments/dev.tfvars
-
 jobs:
   validate_plan:
     name: Validate & Plan (dev)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-        working-directory: ./
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,7 +43,7 @@ jobs:
           pwd
           ls -al
           ls -al environments || true
-          test -f "${{ env.TF_VAR_file }}" && echo "tfvars found" || (echo "tfvars missing"; exit 1)
+          test -f environments/dev.tfvars && echo "tfvars found" || (echo "tfvars missing"; exit 1)
 
       - name: Terraform Init
         run: |
@@ -66,7 +57,7 @@ jobs:
         run: terraform validate
 
       - name: Terraform Plan (dev)
-        run: terraform plan -var-file="${{ env.TF_VAR_file }}" -out=tfplan.bin
+        run: terraform plan -var-file="environments/dev.tfvars" -out=tfplan.bin
 
       - name: Upload Plan Artifact
         uses: actions/upload-artifact@v4
@@ -80,10 +71,6 @@ jobs:
     needs: validate_plan
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     environment: dev
-    defaults:
-      run:
-        shell: bash
-        working-directory: ./
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -114,7 +101,7 @@ jobs:
         run: |
           if [ ! -f tfplan.bin ]; then
             echo "tfplan.bin not found; generating a fresh plan..."
-            terraform plan -var-file="${{ env.TF_VAR_file }}" -out=tfplan.bin
+            terraform plan -var-file="environments/dev.tfvars" -out=tfplan.bin
           else
             echo "Using downloaded plan artifact."
           fi
