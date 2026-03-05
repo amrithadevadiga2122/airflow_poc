@@ -20,8 +20,8 @@ permissions:
   id-token: write
 
 jobs:
-  terraform:
-    name: Plan & Apply (dev)
+  plan:
+    name: Plan (dev)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -35,7 +35,7 @@ jobs:
       - name: Google Auth (OIDC)
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Verify dev.tfvars presence
@@ -63,7 +63,58 @@ jobs:
         run: terraform plan -var-file="environments/dev.tfvars" -out=tfplan.bin
         working-directory: terraform-composer3
 
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-dev
+          path: terraform-composer3/tfplan.bin
+
+  apply:
+    name: Apply (dev)
+    runs-on: ubuntu-latest
+    needs: plan
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    environment: dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+
+      - name: Google Auth (OIDC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Verify dev.tfvars presence
+        run: |
+          if [ ! -f terraform-composer3/environments/dev.tfvars ]; then
+            echo "ERROR: terraform-composer3/environments/dev.tfvars is missing in this commit."
+            exit 1
+          fi
+
+      - name: Terraform Init
+        run: terraform init -upgrade
+        working-directory: terraform-composer3
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-dev
+          path: terraform-composer3
+
+      - name: Ensure plan exists (create if missing)
+        run: |
+          if [ ! -f tfplan.bin ]; then
+            echo "tfplan.bin not found; generating a fresh plan..."
+            terraform plan -var-file="environments/dev.tfvars" -out=tfplan.bin
+          fi
+        working-directory: terraform-composer3
+
       - name: Terraform Apply (dev)
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
         run: terraform apply -auto-approve tfplan.bin
         working-directory: terraform-composer3
