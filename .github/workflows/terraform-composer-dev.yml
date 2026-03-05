@@ -17,8 +17,8 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # Needed for Workload Identity Federation
-  pull-requests: write  # To post plan comments (optional)
+  id-token: write
+  pull-requests: write
 
 env:
   TF_IN_AUTOMATION: "true"
@@ -42,19 +42,12 @@ jobs:
         with:
           terraform_version: 1.6.6
 
-      # Authenticate to Google Cloud using Workload Identity Federation (recommended)
+      # Authenticate to Google Cloud using Workload Identity Federation
       - name: Google Auth (WIF)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          # project_id can be inferred from ADC or provided in provider.tf
-
-      # If you use a service account key JSON instead of WIF, replace the step above with:
-      # - name: Google Auth (SA Key)
-      #   uses: google-github-actions/auth@v2
-      #   with:
-      #     credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
 
       - name: Terraform Init
         run: |
@@ -68,30 +61,20 @@ jobs:
         run: terraform validate
 
       - name: Terraform Plan (dev)
-        id: plan
-        run: |
-          terraform plan -var-file="${{ env.TF_VAR_file }}" -out=tfplan.bin
+        run: terraform plan -var-file="${{ env.TF_VAR_file }}" -out=tfplan.bin
 
-      - name: Save Plan Artifact
+      - name: Upload Plan Artifact
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-dev
           path: tfplan.bin
-
-      - name: Comment plan on PR (optional)
-        if: github.event_name == 'pull_request'
-        run: |
-          PLAN_SUMMARY=$(terraform show -no-color tfplan.bin | sed -n '1,200p')
-          gh pr comment ${{ github.event.pull_request.number }} --body "```\n${PLAN_SUMMARY}\n```"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   apply:
     name: Apply (dev)
     runs-on: ubuntu-latest
     needs: validate_plan
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    environment: dev   # Protect this environment in GitHub for manual approval before apply
+    environment: dev
     defaults:
       run:
         shell: bash
@@ -111,22 +94,25 @@ jobs:
           workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      # If using SA key JSON instead of WIF, replace with the same SA Key step as above
-
       - name: Terraform Init
         run: terraform init -upgrade
 
       - name: Download Plan Artifact (optional)
+        id: download_plan
         uses: actions/download-artifact@v4
         with:
           name: tfplan-dev
           path: .
         continue-on-error: true
 
-      - name: Apply with fresh plan (fallback)
-        if: failure() || !exists('tfplan.bin')
-        run: terraform plan -var-file="${{ env.TF_VAR_file }}" -out=tfplan.bin
+      - name: Ensure plan file exists (create if missing)
+        run: |
+          if [ ! -f tfplan.bin ]; then
+            echo "tfplan.bin not found; generating a fresh plan..."
+            terraform plan -var-file="${{ env.TF_VAR_file }}" -out=tfplan.bin
+          else
+            echo "Using downloaded plan artifact."
+          fi
 
       - name: Terraform Apply (dev)
         run: terraform apply -auto-approve tfplan.bin
-
