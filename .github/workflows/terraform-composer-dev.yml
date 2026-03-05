@@ -47,6 +47,12 @@ jobs:
             exit 1
           fi
 
+      - name: Debug variables.tf content
+        run: |
+        echo "Commit: $GITHUB_SHA"
+        echo "Path: terraform-composer3/variables.tf"
+        nl -ba terraform-composer3/variables.tf | sed -n '1,40p'
+
       - name: Terraform Init
         run: terraform init -upgrade
         working-directory: terraform-composer3
