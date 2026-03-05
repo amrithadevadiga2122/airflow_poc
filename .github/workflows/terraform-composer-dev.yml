@@ -1,27 +1,19 @@
 name: Terraform CI/CD (Composer Dev)
 
 on:
-  pull_request:
-    paths:
-      - "**.tf"
-      - "**.tfvars"
-      - ".github/workflows/terraform-composer-dev.yml"
   push:
     branches: [ "main" ]
-    paths:
-      - "**.tf"
-      - "**.tfvars"
-      - ".github/workflows/terraform-composer-dev.yml"
+  pull_request:
+    branches: [ "*" ]
   workflow_dispatch:
 
 permissions:
   contents: read
   id-token: write
-  pull-requests: write
 
 jobs:
-  validate_plan:
-    name: Validate & Plan (dev)
+  plan:
+    name: Plan (dev)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,12 +35,9 @@ jobs:
           pwd
           ls -al
           ls -al environments || true
-          test -f environments/dev.tfvars && echo "tfvars found" || (echo "tfvars missing"; exit 1)
 
       - name: Terraform Init
-        run: |
-          terraform --version
-          terraform init -upgrade
+        run: terraform init -upgrade
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
@@ -68,8 +57,8 @@ jobs:
   apply:
     name: Apply (dev)
     runs-on: ubuntu-latest
-    needs: validate_plan
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: plan
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' || github.event_name == 'workflow_dispatch'
     environment: dev
     steps:
       - name: Checkout
@@ -83,7 +72,7 @@ jobs:
       - name: Google Auth (WIF)
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Terraform Init
@@ -97,7 +86,7 @@ jobs:
           path: .
         continue-on-error: true
 
-      - name: Ensure plan file exists (create if missing)
+      - name: Ensure plan exists (create if missing)
         run: |
           if [ ! -f tfplan.bin ]; then
             echo "tfplan.bin not found; generating a fresh plan..."
