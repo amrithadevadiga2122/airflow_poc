@@ -91,6 +91,16 @@ jobs:
         with:
           terraform_version: "1.6.6"
  
+
+      - name: Google Auth (OIDC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          project_id: prj-aidataandanalytics-s-24362
+          create_credentials_file: true
+          export_environment_variables: true
+      
       - name: Check service_account secret
 
         run: |
@@ -106,15 +116,6 @@ jobs:
           gcloud config set project prj-aidataandanalytics-s-24362
           echo "Listing enabled services (should succeed):"
           gcloud services list --enabled --project prj-aidataandanalytics-s-24362
-
-      - name: Google Auth (OIDC)
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          project_id: prj-aidataandanalytics-s-24362
-          create_credentials_file: true
-          export_environment_variables: true
 
       - name: Verify dev.tfvars presence
         run: |
