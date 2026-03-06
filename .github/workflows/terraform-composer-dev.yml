@@ -96,6 +96,7 @@ jobs:
         with:
           workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          project_id: prj-aidataandanalytics-s-24362
 
       - name: Verify dev.tfvars presence
         run: |
@@ -135,7 +136,7 @@ jobs:
         run: |
           echo "List enabled services (should succeed if you have access):"
           gcloud services list --enabled --project prj-aidataandanalytics-s-24362
-          
+
 
       - name: Terraform Apply (dev)
         run: terraform apply -auto-approve tfplan.bin
