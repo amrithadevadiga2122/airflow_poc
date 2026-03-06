@@ -132,7 +132,6 @@ jobs:
           gcloud projects describe prj-aidataandanalytics-s-24362 --format="value(projectNumber)"
       
       - name: Check Service Usage access
-
         run: |
           echo "List enabled services (should succeed if you have access):"
           gcloud services list --enabled --project prj-aidataandanalytics-s-24362
