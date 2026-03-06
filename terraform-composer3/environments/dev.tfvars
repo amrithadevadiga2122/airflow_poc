@@ -16,4 +16,4 @@ ENV = "dev"
 # Do NOT add AIRFLOW__CORE__LOAD_EXAMPLES here — Composer 3 forbids AIRFLOW__* config env vars
 }
 
-pypi_packages = { "requests" = "==2.31.0" }
+#pypi_packages = { "requests" = "==2.31.0" }
