@@ -1,0 +1,49 @@
+name: Terraform Destroy (Composer Dev)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  destroy:
+    name: Destroy (dev)
+    runs-on: ubuntu-latest
+    environment: dev  # required if your GCP secrets are environment-scoped
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./terraform-composer3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Google Auth (OIDC -> SA impersonation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          project_id: prj-aidataandanalytics-s-24362
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Verify auth
+        run: |
+          gcloud config set project prj-aidataandanalytics-s-24362
+          gcloud services list --enabled --project prj-aidataandanalytics-s-24362
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+
+      - name: Init
+        run: terraform init -upgrade
+
+      - name: Show destroy plan (dev)
+        run: terraform plan -destroy -var-file="environments/dev.tfvars"
+
+      - name: Destroy (dev)
+        run: terraform destroy -auto-approve -var-file="environments/dev.tfvars"
