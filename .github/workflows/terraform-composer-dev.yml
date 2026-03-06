@@ -130,6 +130,7 @@ jobs:
           gcloud config list core/project
           echo "Project number:"
           gcloud projects describe prj-aidataandanalytics-s-24362 --format="value(projectNumber)"
+      
       - name: Check Service Usage access
 
         run: |
