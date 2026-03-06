@@ -123,7 +123,6 @@ jobs:
         working-directory: terraform-composer3
 
       - name: Who am I (active identity)
-
         run: |
           echo "Active account:"
           gcloud auth list --filter=status:ACTIVE --format="value(account)"
