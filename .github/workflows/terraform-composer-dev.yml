@@ -48,7 +48,6 @@ jobs:
           fi
 
       - name: Debug variables.tf content
-
         run: |
           echo "Commit: $GITHUB_SHA"
           echo "Path: variables.tf"
