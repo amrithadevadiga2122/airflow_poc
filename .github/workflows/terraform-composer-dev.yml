@@ -90,6 +90,15 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.6.6"
+ 
+      - name: Check service_account secret
+
+        run: |
+          if [ -z "${{ secrets.GCP_SERVICE_ACCOUNT }}" ]; then
+          echo "GCP_SERVICE_ACCOUNT is empty (secret not available to this job)."
+          echo "If your secret is environment-scoped, add 'environment: dev' to this job."
+          exit 1 
+          fi
 
       - name: Google Auth (OIDC)
         uses: google-github-actions/auth@v2
