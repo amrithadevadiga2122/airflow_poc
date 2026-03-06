@@ -11,7 +11,11 @@ subnet_self_link  = "projects/prj-aidataandanalytics-s-24362/regions/us-central1
 dags_bucket  = "composer_dags_dev_poc"
 allowed_cidr = "0.0.0.0/0"
 
-env_variables = { ENV = "dev" }
+env_variables = {
+  ENV = "dev"
+  AIRFLOW__CORE__LOAD_EXAMPLES = "False"
+}
 pypi_packages = { "requests" = "==2.31.0" }
-airflow_config_overrides = { "core-load_examples" = "False" }
+# Remove the blocked override:
+# airflow_config_overrides = { "core-load_examples" = "False" }
 web_server_plugins_enabled = true
