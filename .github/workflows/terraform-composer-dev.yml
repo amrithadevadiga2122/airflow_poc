@@ -122,6 +122,21 @@ jobs:
           fi
         working-directory: terraform-composer3
 
+      - name: Who am I (active identity)
+
+        run: |
+          echo "Active account:"
+          gcloud auth list --filter=status:ACTIVE --format="value(account)"
+          echo "Project config:"
+          gcloud config list core/project
+          echo "Project number:"
+          gcloud projects describe prj-aidataandanalytics-s-24362 --format="value(projectNumber)"
+      - name: Check Service Usage access
+
+        run: |
+          echo "List enabled services (should succeed if you have access):"
+          gcloud services list --enabled --project prj-aidataandanalytics-s-24362
+
       - name: Terraform Apply (dev)
         run: terraform apply -auto-approve tfplan.bin
         working-directory: terraform-composer3
