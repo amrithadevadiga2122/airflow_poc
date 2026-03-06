@@ -100,6 +100,13 @@ jobs:
           exit 1 
           fi
 
+      - name: Verify access as CI SA
+
+        run: |
+          gcloud config set project prj-aidataandanalytics-s-24362
+          echo "Listing enabled services (should succeed):"
+          gcloud services list --enabled --project prj-aidataandanalytics-s-24362
+
       - name: Google Auth (OIDC)
         uses: google-github-actions/auth@v2
         with:
