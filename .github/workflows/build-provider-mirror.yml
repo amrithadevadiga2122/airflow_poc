@@ -7,6 +7,10 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  PROVIDER_VERSION: "5.63.0"     # <-- set the version to mirror and use in code
+  MIRROR_BUCKET: "tf-provider-mirror-prj-aidataandanalytics"  # <-- choose/confirm a unique bucket
+
 jobs:
   build_mirror:
     runs-on: ubuntu-latest
@@ -32,16 +36,16 @@ jobs:
       - name: Prepare provider lock
         run: |
           mkdir -p provider_lock
-          cat > provider_lock/versions.tf <<'EOF'
+          cat > provider_lock/versions.tf <<EOF
           terraform {
             required_providers {
               google = {
                 source  = "hashicorp/google"
-                version = "5.66.0"
+                version = "${{ env.PROVIDER_VERSION }}"
               }
               google-beta = {
                 source  = "hashicorp/google-beta"
-                version = "5.66.0"
+                version = "${{ env.PROVIDER_VERSION }}"
               }
             }
           }
@@ -59,11 +63,15 @@ jobs:
           find ../provider-mirror -maxdepth 4 -type f | sort
 
       - name: Upload mirror to GCS (public read)
-        env:
-          MIRROR_BUCKET: tf-provider-mirror-prj-aidataandanalytics
         run: |
-          if ! gcloud storage buckets describe gs://$MIRROR_BUCKET >/dev/null 2>&1; then
-            gcloud storage buckets create gs://$MIRROR_BUCKET --location=US
+          if ! gcloud storage buckets describe gs://${{ env.MIRROR_BUCKET }} >/dev/null 2>&1; then
+            gcloud storage buckets create gs://${{ env.MIRROR_BUCKET }} --location=US
           fi
-          gsutil -m rsync -r provider-mirror gs://$MIRROR_BUCKET
-          gsutil iam ch allUsers:objectViewer gs://$MIRROR_BUCKET
+          gsutil -m rsync -r provider-mirror gs://${{ env.MIRROR_BUCKET }}
+          gsutil iam ch allUsers:objectViewer gs://${{ env.MIRROR_BUCKET }}
+
+      - name: Upload lock file artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-lock
+          path: provider_lock/.terraform.lock.hcl
