@@ -8,13 +8,13 @@ permissions:
   id-token: write
 
 env:
-  PROVIDER_VERSION: "5.63.0"     # <-- set the version to mirror and use in code
-  MIRROR_BUCKET: "tf-provider-mirror-prj-aidataandanalytics"  # <-- choose/confirm a unique bucket
+  PROVIDER_VERSION: "5.63.0"
+  MIRROR_BUCKET: "tf-provider-mirror-prj-aidataandanalytics"
 
 jobs:
   build_mirror:
     runs-on: ubuntu-latest
-    environment: dev  # required if your GCP secrets are environment-scoped
+    environment: dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
