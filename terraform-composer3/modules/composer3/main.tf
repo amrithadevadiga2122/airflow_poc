@@ -1,4 +1,6 @@
 resource "google_composer_environment" "env" {
+  provider = google-beta
+
   name   = var.name
   region = var.region
 

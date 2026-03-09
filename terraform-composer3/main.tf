@@ -31,6 +31,9 @@ module "storage" {
 module "composer3" {
   source = "./modules/composer3"
 
+  providers = {
+    google-beta = google-beta
+  }
   project_id            = var.project_id
   region                = var.region
   name                  = var.composer_env_name
