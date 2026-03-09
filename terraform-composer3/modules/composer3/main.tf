@@ -39,9 +39,9 @@ resource "google_composer_environment" "env" {
       subnetwork      = var.subnetwork_self_link
     }
 
-    storage_config {
-      bucket = var.dags_bucket  # bucket name only (no gs://)
-    }
+  #  storage_config {
+  #    bucket = var.dags_bucket  # bucket name only (no gs://)
+  #  }
 
     web_server_network_access_control {
       allowed_ip_range {
