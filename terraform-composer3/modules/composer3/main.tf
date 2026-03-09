@@ -41,7 +41,9 @@ resource "google_composer_environment" "env" {
 
     # private_environment_config removed (unsupported in provider 5.45.x)
     # storage_config removed (unsupported in provider 5.45.x)
-
+    storage_config {
+      bucket = var.dags_bucket   # bucket name only, no gs://
+    }
     web_server_network_access_control {
       allowed_ip_range {
         value       = var.allowed_cidr

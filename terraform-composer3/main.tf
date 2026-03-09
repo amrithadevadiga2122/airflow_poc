@@ -22,7 +22,7 @@ module "storage" {
 
   project_id   = var.project_id
   location     = var.region
-  create       = false
+  create       = true
   bucket_name  = var.dags_bucket
   force_destroy = false
 }
