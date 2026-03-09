@@ -1,0 +1,69 @@
+name: Build Provider Mirror (google/google-beta)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build_mirror:
+    runs-on: ubuntu-latest
+    environment: dev  # required if your GCP secrets are environment-scoped
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+
+      - name: Google Auth (OIDC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          project_id: prj-aidataandanalytics-s-24362
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Prepare provider lock
+        run: |
+          mkdir -p provider_lock
+          cat > provider_lock/versions.tf <<'EOF'
+          terraform {
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "5.66.0"
+              }
+              google-beta = {
+                source  = "hashicorp/google-beta"
+                version = "5.66.0"
+              }
+            }
+          }
+          EOF
+          cd provider_lock
+          terraform init
+          terraform providers lock -platform=linux_amd64
+
+      - name: Mirror providers locally
+        run: |
+          mkdir -p provider-mirror
+          cd provider_lock
+          terraform providers mirror ../provider-mirror
+          echo "Mirror contents:"
+          find ../provider-mirror -maxdepth 4 -type f | sort
+
+      - name: Upload mirror to GCS (public read)
+        env:
+          MIRROR_BUCKET: tf-provider-mirror-prj-aidataandanalytics
+        run: |
+          if ! gcloud storage buckets describe gs://$MIRROR_BUCKET >/dev/null 2>&1; then
+            gcloud storage buckets create gs://$MIRROR_BUCKET --location=US
+          fi
+          gsutil -m rsync -r provider-mirror gs://$MIRROR_BUCKET
+          gsutil iam ch allUsers:objectViewer gs://$MIRROR_BUCKET
