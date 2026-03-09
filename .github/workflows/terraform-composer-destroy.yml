@@ -7,15 +7,28 @@ permissions:
   contents: read
   id-token: write
 
+# Prevent overlapping runs that would contend for the state lock
+concurrency:
+  group: terraform-composer3-state
+  cancel-in-progress: false
+
 jobs:
   destroy:
     name: Destroy (dev)
     runs-on: ubuntu-latest
-    environment: dev  # required if your GCP secrets are environment-scoped
+    environment: dev
     defaults:
       run:
         shell: bash
         working-directory: ./terraform-composer3
+    env:
+      # CURRENT backend path (keep as-is for your setup)
+      # If your backend.tf uses a different bucket/prefix, update these:
+      STATE_BUCKET: composer_dags_dev
+      STATE_PREFIX: terraform/composer/dev
+      TF_WORKSPACE: default
+      # Locks older than this are considered stale
+      STALE_LOCK_MINUTES: "20"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,21 +42,56 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Verify auth
+      - name: Verify auth (quick check)
         run: |
           gcloud config set project prj-aidataandanalytics-s-24362
-          gcloud services list --enabled --project prj-aidataandanalytics-s-24362
+          gcloud services list --enabled --project prj-aidataandanalytics-s-24362 | head -n 5
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.6.6"
 
-      - name: Init
+      # Optional: quick backend R/W probe (helps diagnose IAM/path issues)
+      - name: Test backend path read/write
+        run: |
+          echo "rw-test" | gsutil cp - gs://${STATE_BUCKET}/${STATE_PREFIX}/backend_rw_test
+          gsutil ls gs://${STATE_BUCKET}/${STATE_PREFIX}/
+
+      # Check lock object and remove only if it's stale (older than STALE_LOCK_MINUTES)
+      - name: Check Terraform state lock in GCS (stale-lock cleanup)
+        run: |
+          set -euo pipefail
+          LOCK_PATH="gs://${STATE_BUCKET}/${STATE_PREFIX}/${TF_WORKSPACE}.tflock"
+          echo "Checking lock: ${LOCK_PATH}"
+          if gsutil -q stat "${LOCK_PATH}"; then
+            META="$(gsutil stat "${LOCK_PATH}")"
+            echo "${META}"
+            UPDATED="$(echo "${META}" | sed -n 's/ *Update time: *\(.*\)$/\1/p')"
+            if [ -z "${UPDATED}" ]; then
+              echo "Cannot read lock timestamp; refusing to proceed."
+              echo "If no run is active, clear the lock manually: gsutil rm ${LOCK_PATH}"
+              exit 1
+            fi
+            LOCK_TS="$(date -d "${UPDATED}" +%s)"
+            NOW_TS="$(date +%s)"
+            AGE_MIN=$(( (NOW_TS - LOCK_TS) / 60 ))
+            echo "Lock age: ${AGE_MIN} min"
+            if [ "${AGE_MIN}" -ge "${STALE_LOCK_MINUTES}" ]; then
+              echo "Stale lock (> ${STALE_LOCK_MINUTES} min). Removing..."
+              gsutil rm "${LOCK_PATH}"
+            else
+              echo "Lock is fresh; destroy will wait on -lock-timeout."
+            fi
+          else
+            echo "No lock object found."
+          fi
+
+      - name: Init (attach to current backend)
         run: terraform init -upgrade
 
       - name: Show destroy plan (dev)
-        run: terraform plan -destroy -var-file="environments/dev.tfvars"
+        run: terraform plan -destroy -var-file="environments/dev.tfvars" -lock-timeout=10m
 
       - name: Destroy (dev)
-        run: terraform destroy -auto-approve -var-file="environments/dev.tfvars"
+        run: terraform destroy -auto-approve -var-file="environments/dev.tfvars" -lock-timeout=20m
