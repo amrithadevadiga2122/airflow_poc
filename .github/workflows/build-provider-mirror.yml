@@ -3,9 +3,9 @@ name: Build Provider Bundle (google/google-beta)
 on:
   workflow_dispatch:
     inputs:
-      preferred_versions:
-        description: "Space-separated candidate versions (first available is used)"
-        default: "5.66.0 5.65.0 5.64.0 5.63.1 5.63.0 5.62.0 5.61.0"
+      min_major_minor:
+        description: "Minimum major.minor to consider (e.g., 5.60)"
+        default: "5.60"
         required: true
 
 permissions:
@@ -20,9 +20,16 @@ jobs:
   build_bundle:
     runs-on: ubuntu-latest
     environment: dev
+    outputs:
+      found_version: ${{ steps.resolve.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install jq
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
       - name: Google Auth (OIDC)
         uses: google-github-actions/auth@v2
@@ -39,30 +46,38 @@ jobs:
             gcloud storage buckets create gs://${BUNDLE_BUCKET} --location=US
           fi
 
-      - name: Resolve available provider version
+      - name: Resolve highest common provider version from releases
         id: resolve
         run: |
           set -e
-          CANDIDATES="${{ inputs.preferred_versions }}"
-          echo "Candidates: $CANDIDATES"
-          for V in $CANDIDATES; do
-            G="https://releases.hashicorp.com/terraform-provider-google/${V}/terraform-provider-google_${V}_linux_amd64.zip"
-            B="https://releases.hashicorp.com/terraform-provider-google-beta/${V}/terraform-provider-google-beta_${V}_linux_amd64.zip"
-            if curl -sIf "$G" >/dev/null 2>&1 && curl -sIf "$B" >/dev/null 2>&1; then
-              echo "FOUND_VERSION=$V" >> "$GITHUB_ENV"
-              echo "Resolved version: $V"
-              exit 0
-            fi
-          done
-          echo "No provider version found from candidates." >&2
-          exit 1
+          MIN="${{ inputs.min_major_minor }}"
+          echo "Minimum major.minor: $MIN"
+          GOOGLE_INDEX=$(curl -fsSL https://releases.hashicorp.com/terraform-provider-google/index.json)
+          BETA_INDEX=$(curl -fsSL https://releases.hashicorp.com/terraform-provider-google-beta/index.json)
+          echo "$GOOGLE_INDEX" > google_index.json
+          echo "$BETA_INDEX" > google_beta_index.json
 
-      - name: Download provider zips (linux_amd64)
+          # Get all versions for each provider
+          GOOGLE_VERSIONS=$(jq -r '.versions[].version' google_index.json | sort -V)
+          BETA_VERSIONS=$(jq -r '.versions[].version' google_beta_index.json | sort -V)
+
+          # Intersect the two sets, filter >= MIN, sort descending, take highest
+          COMMON=$(comm -12 <(echo "$GOOGLE_VERSIONS") <(echo "$BETA_VERSIONS") | awk -v min="$MIN" 'function ver(v){split(v,a,"."); return a[1]"."a[2]} ver($0)>=min' | sort -V -r | head -n1)
+
+          if [ -z "$COMMON" ]; then
+            echo "No common google/google-beta version found >= $MIN" >&2
+            exit 1
+          fi
+
+          echo "Resolved common version: $COMMON"
+          echo "version=$COMMON" >> "$GITHUB_OUTPUT"
+
+      - name: Download google/google-beta provider zips (linux_amd64)
         run: |
           set -e
+          V="${{ steps.resolve.outputs.version }}"
           mkdir -p bundle/plugins
           cd bundle/plugins
-          V="${FOUND_VERSION:?missing}"
           curl -fL -o terraform-provider-google_${V}_linux_amd64.zip \
             "https://releases.hashicorp.com/terraform-provider-google/${V}/terraform-provider-google_${V}_linux_amd64.zip"
           curl -fL -o terraform-provider-google-beta_${V}_linux_amd64.zip \
@@ -70,12 +85,12 @@ jobs:
           unzip -o terraform-provider-google_${V}_linux_amd64.zip
           unzip -o terraform-provider-google-beta_${V}_linux_amd64.zip
 
-          # Build registry-style tree for -plugin-dir
+          # Build registry-style tree expected by -plugin-dir
           mkdir -p registry.terraform.io/hashicorp/google/${V}/linux_amd64
           mkdir -p registry.terraform.io/hashicorp/google-beta/${V}/linux_amd64
           mv terraform-provider-google_* registry.terraform.io/hashicorp/google/${V}/linux_amd64/ || true
           mv terraform-provider-google-beta_* registry.terraform.io/hashicorp/google-beta/${V}/linux_amd64/ || true
-          echo "Registry tree built:"
+          echo "Registry tree:"
           find registry.terraform.io -type f -maxdepth 6 | sort
 
       - name: Setup Terraform
@@ -83,11 +98,11 @@ jobs:
         with:
           terraform_version: "1.6.6"
 
-      - name: Generate lock file using -plugin-dir (offline)
+      - name: Generate lock file offline using -plugin-dir
         run: |
           set -e
           mkdir -p bundle/lock
-          V="${FOUND_VERSION:?missing}"
+          V="${{ steps.resolve.outputs.version }}"
           cat > bundle/lock/versions.tf <<EOF
           terraform {
             required_providers {
@@ -109,12 +124,9 @@ jobs:
       - name: Upload bundle and lock to GCS
         run: |
           set -e
-          V="${FOUND_VERSION:?missing}"
+          V="${{ steps.resolve.outputs.version }}"
           DEST="gs://${BUNDLE_BUCKET}/bundles/google-${V}"
-          # Upload registry-style plugins tree
           gcloud storage rsync -r "$GITHUB_WORKSPACE/bundle/plugins/registry.terraform.io" "${DEST}/registry.terraform.io"
-          # Upload lock
           gcloud storage cp "$GITHUB_WORKSPACE/bundle/.terraform.lock.hcl" "${DEST}/.terraform.lock.hcl"
           echo "Bundle: ${DEST}/registry.terraform.io"
           echo "Lock:   ${DEST}/.terraform.lock.hcl"
-          echo "FOUND_VERSION=$V"
