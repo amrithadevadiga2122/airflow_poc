@@ -3,15 +3,12 @@ resource "google_composer_environment" "env" {
   name     = var.name
   region   = var.region
 
-  # Custom Bucket (MUST be top-level, outside the config block)
+  # TOP-LEVEL: Storage config for custom bucket
   storage_config {
     bucket = var.dags_bucket
   }
 
   config {
-    # CORRECT: Private IP setting for Cloud Composer 3
-    enable_private_environment = true
-
     software_config {
       image_version            = var.image_version
       env_variables            = var.env_variables
@@ -19,15 +16,18 @@ resource "google_composer_environment" "env" {
       airflow_config_overrides = var.airflow_config_overrides
     }
 
+    # FIX: Private IP for Composer 3 often requires this block again in Provider v7+
+    private_environment_config {
+      enable_private_endpoint = true
+    }
+
     node_config {
       service_account = var.service_account_email
       network         = var.network_self_link
       subnetwork      = var.subnetwork_self_link
-      # Network Tags: None
-      tags            = [] 
+      tags            = [] # Network tags: None
     }
 
-    # Web Server Access Control: Allow All (Default)
     web_server_network_access_control {
       allowed_ip_range {
         value       = "0.0.0.0/0"
