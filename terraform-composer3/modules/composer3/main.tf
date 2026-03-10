@@ -3,12 +3,15 @@ resource "google_composer_environment" "env" {
   name     = var.name
   region   = var.region
 
-  # TOP-LEVEL: Storage config for custom bucket
+  # TOP-LEVEL: This is where custom bucket config lives
   storage_config {
     bucket = var.dags_bucket
   }
 
   config {
+    # REMOVED: private_environment_config (Not for Composer 3)
+    # REMOVED: enable_private_environment (Causes "Unsupported" error)
+
     software_config {
       image_version            = var.image_version
       env_variables            = var.env_variables
@@ -16,16 +19,11 @@ resource "google_composer_environment" "env" {
       airflow_config_overrides = var.airflow_config_overrides
     }
 
-    # FIX: Private IP for Composer 3 often requires this block again in Provider v7+
-    private_environment_config {
-      enable_private_endpoint = true
-    }
-
     node_config {
       service_account = var.service_account_email
       network         = var.network_self_link
       subnetwork      = var.subnetwork_self_link
-      tags            = [] # Network tags: None
+      tags            = [] # None (Default)
     }
 
     web_server_network_access_control {
