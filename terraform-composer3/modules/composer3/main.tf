@@ -3,14 +3,14 @@ resource "google_composer_environment" "env" {
   name     = var.name
   region   = var.region
 
-  # TOP-LEVEL: Custom Bucket (outside config block)
+  # Custom Bucket Configuration (MUST be top-level)
   storage_config {
     bucket = var.dags_bucket
   }
 
   config {
-    # CORRECT: Private IP setting for Composer 3
-    enable_private_environment = true
+    # FIX: Use enable_private_ip_environment for Private IP in Composer 3
+    enable_private_ip_environment = true
 
     software_config {
       image_version            = var.image_version
@@ -26,6 +26,7 @@ resource "google_composer_environment" "env" {
       tags            = [] # Network tags: None
     }
 
+    # Web Server Access Control: Allow All (Default)
     web_server_network_access_control {
       allowed_ip_range {
         value       = "0.0.0.0/0"
