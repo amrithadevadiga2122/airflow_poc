@@ -1,77 +1,90 @@
-name: Build Provider Mirror (google/google-beta)
+name: Build Provider Bundle (google/google-beta)
 
 on:
   workflow_dispatch:
+    inputs:
+      provider_version:
+        description: Provider version (supports storage_config)
+        default: "5.63.0"
+        required: true
 
 permissions:
   contents: read
   id-token: write
 
 env:
-  PROVIDER_VERSION: "5.63.0"                         # provider version to mirror
-  MIRROR_BUCKET: "tf-provider-mirror-prj-aidataandanalytics"  # change if different
+  PROVIDER_VERSION: ${{ inputs.provider_version }}
+  BUNDLE_BUCKET: tf-provider-bundle-prj-aidataandanalytics   # change if different
+  PROJECT_ID: prj-aidataandanalytics-s-24362
 
 jobs:
-  build_mirror:
+  build_bundle:
     runs-on: ubuntu-latest
-    environment: dev   # keep if your GCP secrets are env-scoped
+    environment: dev  # if your secrets are env-scoped
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.6.6"
 
       - name: Google Auth (OIDC)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          project_id: prj-aidataandanalytics-s-24362
+          project_id: ${{ env.PROJECT_ID }}
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Prepare provider lock (linux_amd64)
+      - name: Ensure bundle bucket exists
         run: |
-          mkdir -p provider_lock
-          cat > provider_lock/versions.tf <<EOF
+          if ! gcloud storage buckets describe gs://${BUNDLE_BUCKET} >/dev/null 2>&1; then
+            gcloud storage buckets create gs://${BUNDLE_BUCKET} --location=US
+          fi
+
+      - name: Download google/google-beta provider zips (linux_amd64)
+        run: |
+          set -e
+          mkdir -p bundle/plugins
+          cd bundle/plugins
+          curl -fL -o terraform-provider-google_${PROVIDER_VERSION}_linux_amd64.zip \
+            https://releases.hashicorp.com/terraform-provider-google/${PROVIDER_VERSION}/terraform-provider-google_${PROVIDER_VERSION}_linux_amd64.zip
+          curl -fL -o terraform-provider-google-beta_${PROVIDER_VERSION}_linux_amd64.zip \
+            https://releases.hashicorp.com/terraform-provider-google-beta/${PROVIDER_VERSION}/terraform-provider-google-beta_${PROVIDER_VERSION}_linux_amd64.zip
+          unzip -o terraform-provider-google_${PROVIDER_VERSION}_linux_amd64.zip
+          unzip -o terraform-provider-google-beta_${PROVIDER_VERSION}_linux_amd64.zip
+          ls -l
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+
+      - name: Generate lock file using -plugin-dir (offline)
+        run: |
+          set -e
+          mkdir -p bundle/lock
+          cat > bundle/lock/versions.tf <<EOF
           terraform {
             required_providers {
               google = {
                 source  = "hashicorp/google"
-                version = "${{ env.PROVIDER_VERSION }}"
+                version = "${PROVIDER_VERSION}"
               }
               google-beta = {
                 source  = "hashicorp/google-beta"
-                version = "${{ env.PROVIDER_VERSION }}"
+                version = "${PROVIDER_VERSION}"
               }
             }
           }
           EOF
-          cd provider_lock
-          terraform init
-          # Lock for Cloud Shell/linux_amd64
-          terraform providers lock -platform=linux_amd64
+          cd bundle/lock
+          terraform init -plugin-dir="$GITHUB_WORKSPACE/bundle/plugins" -upgrade
+          cp .terraform.lock.hcl "$GITHUB_WORKSPACE/bundle/.terraform.lock.hcl"
 
-      - name: Mirror providers locally
+      - name: Upload bundle and lock to GCS
         run: |
-          mkdir -p provider-mirror
-          cd provider_lock
-          terraform providers mirror ../provider-mirror
-          echo "Mirror contents:"
-          find ../provider-mirror -maxdepth 4 -type f | sort
-
-      - name: Upload mirror to GCS
-        run: |
-          if ! gcloud storage buckets describe gs://composer_dags_dev >/dev/null 2>&1; then
-            gcloud storage buckets create gs://composer_dags_dev --location=US
-          fi
-          gsutil -m rsync -r provider-mirror gs://composer_dags_dev
-          # If your org allows public read, uncomment:
-          # gsutil iam ch allUsers:objectViewer gs://composer_dags_dev
-
-      - name: Upload lock file
-        run: |
-          gsutil cp provider_lock/.terraform.lock.hcl gs://composer_dags_dev/locks/.terraform.lock.hcl
+          set -e
+          DEST="gs://${BUNDLE_BUCKET}/bundles/google-${PROVIDER_VERSION}"
+          gcloud storage rsync -r "$GITHUB_WORKSPACE/bundle/plugins" "${DEST}/plugins"
+          gcloud storage cp "$GITHUB_WORKSPACE/bundle/.terraform.lock.hcl" "${DEST}/.terraform.lock.hcl"
+          echo "Bundle: ${DEST}/plugins"
+          echo "Lock:   ${DEST}/.terraform.lock.hcl"
