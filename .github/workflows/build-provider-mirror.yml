@@ -8,13 +8,13 @@ permissions:
   id-token: write
 
 env:
-  PROVIDER_VERSION: "5.63.0"
-  MIRROR_BUCKET: "tf-provider-mirror-prj-aidataandanalytics"
+  PROVIDER_VERSION: "5.63.0"                         # provider version to mirror
+  MIRROR_BUCKET: "tf-provider-mirror-prj-aidataandanalytics"  # change if different
 
 jobs:
   build_mirror:
     runs-on: ubuntu-latest
-    environment: dev
+    environment: dev   # keep if your GCP secrets are env-scoped
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Prepare provider lock
+      - name: Prepare provider lock (linux_amd64)
         run: |
           mkdir -p provider_lock
           cat > provider_lock/versions.tf <<EOF
@@ -52,6 +52,7 @@ jobs:
           EOF
           cd provider_lock
           terraform init
+          # Lock for Cloud Shell/linux_amd64
           terraform providers lock -platform=linux_amd64
 
       - name: Mirror providers locally
@@ -62,16 +63,15 @@ jobs:
           echo "Mirror contents:"
           find ../provider-mirror -maxdepth 4 -type f | sort
 
-      - name: Upload mirror to GCS (public read)
+      - name: Upload mirror to GCS
         run: |
-          if ! gcloud storage buckets describe gs://${{ env.MIRROR_BUCKET }} >/dev/null 2>&1; then
-            gcloud storage buckets create gs://${{ env.MIRROR_BUCKET }} --location=US
+          if ! gcloud storage buckets describe gs://composer_dags_dev >/dev/null 2>&1; then
+            gcloud storage buckets create gs://composer_dags_dev --location=US
           fi
-          gsutil -m rsync -r provider-mirror gs://${{ env.MIRROR_BUCKET }}
-          gsutil iam ch allUsers:objectViewer gs://${{ env.MIRROR_BUCKET }}
+          gsutil -m rsync -r provider-mirror gs://composer_dags_dev
+          # If your org allows public read, uncomment:
+          # gsutil iam ch allUsers:objectViewer gs://composer_dags_dev
 
-      - name: Upload lock file artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-lock
-          path: provider_lock/.terraform.lock.hcl
+      - name: Upload lock file
+        run: |
+          gsutil cp provider_lock/.terraform.lock.hcl gs://composer_dags_dev/locks/.terraform.lock.hcl
