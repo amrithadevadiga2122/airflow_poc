@@ -3,7 +3,7 @@ resource "google_composer_environment" "env" {
   name     = var.name
   region   = var.region
 
-  # Custom Bucket Configuration
+  # Top-level block
   storage_config {
     bucket = var.dags_bucket
   }
@@ -16,23 +16,16 @@ resource "google_composer_environment" "env" {
       airflow_config_overrides = var.airflow_config_overrides
     }
 
-    # Networking: Private IP & Public PyPI
-    enable_private_endpoint = true # Part of Private IP setup
+    # FIX: enable_private_endpoint must be INSIDE this block
+    private_environment_config {
+      enable_private_endpoint = true
+    }
 
     node_config {
       service_account = var.service_account_email
       network         = var.network_self_link
       subnetwork      = var.subnetwork_self_link
-      
-      # Network Tags: Set to null or empty list as per your "None" requirement
-      tags = [] 
-    }
-
-    # Private IP Configuration
-    private_environment_config {
-      enable_private_endpoint = true
-      # This allows access to public PyPI via Cloud NAT or similar
-      enable_privately_used_public_ips = false 
+      tags            = [] # None (Default)
     }
 
     # Web Server Access Control: Allow All (Default)
