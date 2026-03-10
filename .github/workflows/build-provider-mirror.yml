@@ -3,9 +3,9 @@ name: Build Provider Bundle (google/google-beta)
 on:
   workflow_dispatch:
     inputs:
-      provider_version:
-        description: Provider version (supports storage_config)
-        default: "5.63.0"
+      preferred_versions:
+        description: "Space-separated candidate versions (first available is used)"
+        default: "5.66.0 5.65.0 5.64.0 5.63.1 5.63.0 5.62.0 5.61.0"
         required: true
 
 permissions:
@@ -13,14 +13,13 @@ permissions:
   id-token: write
 
 env:
-  PROVIDER_VERSION: ${{ inputs.provider_version }}
-  BUNDLE_BUCKET: tf-provider-bundle-prj-aidataandanalytics   # change if different
   PROJECT_ID: prj-aidataandanalytics-s-24362
+  BUNDLE_BUCKET: tf-provider-bundle-prj-aidataandanalytics
 
 jobs:
   build_bundle:
     runs-on: ubuntu-latest
-    environment: dev  # if your secrets are env-scoped
+    environment: dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,18 +39,44 @@ jobs:
             gcloud storage buckets create gs://${BUNDLE_BUCKET} --location=US
           fi
 
-      - name: Download google/google-beta provider zips (linux_amd64)
+      - name: Resolve available provider version
+        id: resolve
+        run: |
+          set -e
+          CANDIDATES="${{ inputs.preferred_versions }}"
+          echo "Candidates: $CANDIDATES"
+          for V in $CANDIDATES; do
+            G="https://releases.hashicorp.com/terraform-provider-google/${V}/terraform-provider-google_${V}_linux_amd64.zip"
+            B="https://releases.hashicorp.com/terraform-provider-google-beta/${V}/terraform-provider-google-beta_${V}_linux_amd64.zip"
+            if curl -sIf "$G" >/dev/null 2>&1 && curl -sIf "$B" >/dev/null 2>&1; then
+              echo "FOUND_VERSION=$V" >> "$GITHUB_ENV"
+              echo "Resolved version: $V"
+              exit 0
+            fi
+          done
+          echo "No provider version found from candidates." >&2
+          exit 1
+
+      - name: Download provider zips (linux_amd64)
         run: |
           set -e
           mkdir -p bundle/plugins
           cd bundle/plugins
-          curl -fL -o terraform-provider-google_${PROVIDER_VERSION}_linux_amd64.zip \
-            https://releases.hashicorp.com/terraform-provider-google/${PROVIDER_VERSION}/terraform-provider-google_${PROVIDER_VERSION}_linux_amd64.zip
-          curl -fL -o terraform-provider-google-beta_${PROVIDER_VERSION}_linux_amd64.zip \
-            https://releases.hashicorp.com/terraform-provider-google-beta/${PROVIDER_VERSION}/terraform-provider-google-beta_${PROVIDER_VERSION}_linux_amd64.zip
-          unzip -o terraform-provider-google_${PROVIDER_VERSION}_linux_amd64.zip
-          unzip -o terraform-provider-google-beta_${PROVIDER_VERSION}_linux_amd64.zip
-          ls -l
+          V="${FOUND_VERSION:?missing}"
+          curl -fL -o terraform-provider-google_${V}_linux_amd64.zip \
+            "https://releases.hashicorp.com/terraform-provider-google/${V}/terraform-provider-google_${V}_linux_amd64.zip"
+          curl -fL -o terraform-provider-google-beta_${V}_linux_amd64.zip \
+            "https://releases.hashicorp.com/terraform-provider-google-beta/${V}/terraform-provider-google-beta_${V}_linux_amd64.zip"
+          unzip -o terraform-provider-google_${V}_linux_amd64.zip
+          unzip -o terraform-provider-google-beta_${V}_linux_amd64.zip
+
+          # Build registry-style tree for -plugin-dir
+          mkdir -p registry.terraform.io/hashicorp/google/${V}/linux_amd64
+          mkdir -p registry.terraform.io/hashicorp/google-beta/${V}/linux_amd64
+          mv terraform-provider-google_* registry.terraform.io/hashicorp/google/${V}/linux_amd64/ || true
+          mv terraform-provider-google-beta_* registry.terraform.io/hashicorp/google-beta/${V}/linux_amd64/ || true
+          echo "Registry tree built:"
+          find registry.terraform.io -type f -maxdepth 6 | sort
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -62,16 +87,17 @@ jobs:
         run: |
           set -e
           mkdir -p bundle/lock
+          V="${FOUND_VERSION:?missing}"
           cat > bundle/lock/versions.tf <<EOF
           terraform {
             required_providers {
               google = {
                 source  = "hashicorp/google"
-                version = "${PROVIDER_VERSION}"
+                version = "${V}"
               }
               google-beta = {
                 source  = "hashicorp/google-beta"
-                version = "${PROVIDER_VERSION}"
+                version = "${V}"
               }
             }
           }
@@ -83,8 +109,12 @@ jobs:
       - name: Upload bundle and lock to GCS
         run: |
           set -e
-          DEST="gs://${BUNDLE_BUCKET}/bundles/google-${PROVIDER_VERSION}"
-          gcloud storage rsync -r "$GITHUB_WORKSPACE/bundle/plugins" "${DEST}/plugins"
+          V="${FOUND_VERSION:?missing}"
+          DEST="gs://${BUNDLE_BUCKET}/bundles/google-${V}"
+          # Upload registry-style plugins tree
+          gcloud storage rsync -r "$GITHUB_WORKSPACE/bundle/plugins/registry.terraform.io" "${DEST}/registry.terraform.io"
+          # Upload lock
           gcloud storage cp "$GITHUB_WORKSPACE/bundle/.terraform.lock.hcl" "${DEST}/.terraform.lock.hcl"
-          echo "Bundle: ${DEST}/plugins"
+          echo "Bundle: ${DEST}/registry.terraform.io"
           echo "Lock:   ${DEST}/.terraform.lock.hcl"
+          echo "FOUND_VERSION=$V"
